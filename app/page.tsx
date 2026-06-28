@@ -5,6 +5,8 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Download,
   Filter,
   RefreshCw,
@@ -12,12 +14,26 @@ import {
   ShieldCheck,
   XCircle
 } from "lucide-react";
-import type { EligibilityResult, ResultsPayload, RoutingDecision } from "@/src/lib/types";
+import type {
+  EligibilityListRow,
+  EligibilityResult,
+  PaginatedResultsPayload,
+  ResultsSummary,
+  RoutingDecision
+} from "@/src/lib/types";
 
 type SyncState = "idle" | "loading" | "syncing" | "error";
+type DetailState = "idle" | "loading" | "error";
 
-const emptyPayload: ResultsPayload = {
+type SummaryPayload = {
+  generatedAt: string | null;
+  summary: ResultsSummary;
+  errorCount: number;
+};
+
+const emptySummary: SummaryPayload = {
   generatedAt: null,
+  errorCount: 0,
   summary: {
     totalPatients: 0,
     autoAccept: 0,
@@ -25,61 +41,145 @@ const emptyPayload: ResultsPayload = {
     reject: 0,
     medicareB: 0,
     withWoundEvidence: 0
-  },
-  results: [],
-  errors: []
+  }
+};
+
+const emptyPage: PaginatedResultsPayload = {
+  generatedAt: null,
+  rows: [],
+  page: 1,
+  pageSize: 50,
+  totalRows: 0,
+  totalPages: 0,
+  errorCount: 0
 };
 
 export default function Home() {
-  const [payload, setPayload] = useState<ResultsPayload>(emptyPayload);
+  const [summary, setSummary] = useState<SummaryPayload>(emptySummary);
+  const [pageData, setPageData] = useState<PaginatedResultsPayload>(emptyPage);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedDetail, setSelectedDetail] = useState<EligibilityResult | null>(null);
   const [decisionFilter, setDecisionFilter] = useState<RoutingDecision | "all">("all");
   const [facilityFilter, setFacilityFilter] = useState<string>("all");
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [syncState, setSyncState] = useState<SyncState>("loading");
+  const [detailState, setDetailState] = useState<DetailState>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
-    void loadResults();
+    const preferences = readPreferencesCookie();
+    if (preferences) {
+      setDecisionFilter(preferences.decisionFilter);
+      setFacilityFilter(preferences.facilityFilter);
+      setPageSize(preferences.pageSize);
+    }
+    void loadSummary();
   }, []);
 
-  const filteredResults = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setDebouncedQuery(query);
+      setPage(1);
+    }, 300);
 
-    return payload.results.filter((result) => {
-      const matchesDecision = decisionFilter === "all" || result.routingDecision === decisionFilter;
-      const matchesFacility = facilityFilter === "all" || String(result.facilityId) === facilityFilter;
-      const matchesQuery =
-        !normalizedQuery ||
-        result.patientName.toLowerCase().includes(normalizedQuery) ||
-        result.patientId.toLowerCase().includes(normalizedQuery) ||
-        (result.woundType ?? "").toLowerCase().includes(normalizedQuery);
+    return () => window.clearTimeout(timeout);
+  }, [query]);
 
-      return matchesDecision && matchesFacility && matchesQuery;
-    });
-  }, [decisionFilter, facilityFilter, payload.results, query]);
+  useEffect(() => {
+    writePreferencesCookie({ decisionFilter, facilityFilter, pageSize });
+  }, [decisionFilter, facilityFilter, pageSize]);
 
-  const selected = useMemo(() => {
-    return (
-      filteredResults.find((result) => result.patientId === selectedId) ??
-      filteredResults[0] ??
-      null
-    );
-  }, [filteredResults, selectedId]);
+  useEffect(() => {
+    void loadRows();
+  }, [decisionFilter, facilityFilter, debouncedQuery, page, pageSize, refreshToken]);
 
-  async function loadResults() {
-    setSyncState("loading");
+  useEffect(() => {
+    if (!selectedId) {
+      setSelectedDetail(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    void loadPatientDetail(selectedId, controller.signal);
+    return () => controller.abort();
+  }, [selectedId, refreshToken]);
+
+  const rangeLabel = useMemo(() => {
+    if (pageData.totalRows === 0) return "0 patients";
+    const start = (pageData.page - 1) * pageData.pageSize + 1;
+    const end = Math.min(pageData.totalRows, pageData.page * pageData.pageSize);
+    return `${start}-${end} of ${pageData.totalRows}`;
+  }, [pageData]);
+
+  async function loadSummary() {
     setError(null);
 
     try {
-      const response = await fetch("/api/results", { cache: "no-store" });
-      const data = (await response.json()) as ResultsPayload;
-      setPayload(data);
-      setSelectedId(data.results[0]?.patientId ?? null);
+      const response = await fetch("/api/summary", { cache: "no-store" });
+      const data = (await response.json()) as SummaryPayload;
+      setSummary(data);
       setSyncState("idle");
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Unable to load results");
+      setError(loadError instanceof Error ? loadError.message : "Unable to load summary");
       setSyncState("error");
+    }
+  }
+
+  async function loadRows() {
+    setSyncState((current) => (current === "syncing" ? current : "loading"));
+    setError(null);
+
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(pageSize),
+      decision: decisionFilter,
+      facility: facilityFilter
+    });
+
+    if (debouncedQuery.trim()) {
+      params.set("q", debouncedQuery.trim());
+    }
+
+    try {
+      const response = await fetch(`/api/results?${params.toString()}`, { cache: "no-store" });
+      const data = (await response.json()) as PaginatedResultsPayload;
+      setPageData(data);
+      setSelectedId((current) => {
+        if (data.rows.length === 0) return null;
+        if (current && data.rows.some((row) => row.patientId === current)) return current;
+        return data.rows[0].patientId;
+      });
+      setSyncState("idle");
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Unable to load patients");
+      setSyncState("error");
+    }
+  }
+
+  async function loadPatientDetail(patientId: string, signal: AbortSignal) {
+    setDetailState("loading");
+
+    try {
+      const response = await fetch(`/api/results/${encodeURIComponent(patientId)}`, {
+        cache: "no-store",
+        signal
+      });
+
+      if (!response.ok) {
+        throw new Error(`Detail request failed with ${response.status}`);
+      }
+
+      const data = (await response.json()) as EligibilityResult;
+      setSelectedDetail(data);
+      setDetailState("idle");
+    } catch (detailError) {
+      if ((detailError as Error).name === "AbortError") return;
+      setSelectedDetail(null);
+      setDetailState("error");
     }
   }
 
@@ -98,14 +198,30 @@ export default function Home() {
         throw new Error(`Sync failed with ${response.status}`);
       }
 
-      const data = (await response.json()) as { results: ResultsPayload };
-      setPayload(data.results);
-      setSelectedId(data.results.results[0]?.patientId ?? null);
+      await response.json();
+      await loadSummary();
+      setPage(1);
+      setRefreshToken((value) => value + 1);
       setSyncState("idle");
     } catch (syncError) {
       setError(syncError instanceof Error ? syncError.message : "Unable to complete sync");
       setSyncState("error");
     }
+  }
+
+  function updateDecisionFilter(value: RoutingDecision | "all") {
+    setDecisionFilter(value);
+    setPage(1);
+  }
+
+  function updateFacilityFilter(value: string) {
+    setFacilityFilter(value);
+    setPage(1);
+  }
+
+  function updatePageSize(value: number) {
+    setPageSize(value);
+    setPage(1);
   }
 
   const isBusy = syncState === "loading" || syncState === "syncing";
@@ -121,7 +237,7 @@ export default function Home() {
         <div className="topbarActions">
           <div className="snapshot">
             <Activity size={16} aria-hidden="true" />
-            <span>{payload.generatedAt ? `Synced ${formatDateTime(payload.generatedAt)}` : "No sync yet"}</span>
+            <span>{summary.generatedAt ? `Synced ${formatDateTime(summary.generatedAt)}` : "No sync yet"}</span>
           </div>
           <button className="primaryButton" onClick={runSync} disabled={isBusy} title="Run PCC sync">
             <RefreshCw size={17} className={isBusy ? "spin" : ""} aria-hidden="true" />
@@ -138,11 +254,11 @@ export default function Home() {
       ) : null}
 
       <section className="metrics" aria-label="Eligibility summary">
-        <Metric label="Total patients" value={payload.summary.totalPatients} icon={<Activity size={18} />} />
-        <Metric label="Auto accept" value={payload.summary.autoAccept} icon={<CheckCircle2 size={18} />} tone="good" />
-        <Metric label="Review" value={payload.summary.flagForReview} icon={<AlertTriangle size={18} />} tone="warn" />
-        <Metric label="Rejected" value={payload.summary.reject} icon={<XCircle size={18} />} tone="bad" />
-        <Metric label="Medicare B" value={payload.summary.medicareB} icon={<ShieldCheck size={18} />} />
+        <Metric label="Total patients" value={summary.summary.totalPatients} icon={<Activity size={18} />} />
+        <Metric label="Auto accept" value={summary.summary.autoAccept} icon={<CheckCircle2 size={18} />} tone="good" />
+        <Metric label="Review" value={summary.summary.flagForReview} icon={<AlertTriangle size={18} />} tone="warn" />
+        <Metric label="Rejected" value={summary.summary.reject} icon={<XCircle size={18} />} tone="bad" />
+        <Metric label="Medicare B" value={summary.summary.medicareB} icon={<ShieldCheck size={18} />} />
       </section>
 
       <section className="workspace">
@@ -161,7 +277,7 @@ export default function Home() {
               <Filter size={16} aria-hidden="true" />
               <select
                 value={decisionFilter}
-                onChange={(event) => setDecisionFilter(event.target.value as RoutingDecision | "all")}
+                onChange={(event) => updateDecisionFilter(event.target.value as RoutingDecision | "all")}
               >
                 <option value="all">All decisions</option>
                 <option value="auto_accept">Auto accept</option>
@@ -172,11 +288,21 @@ export default function Home() {
 
             <label className="selectBox">
               <Filter size={16} aria-hidden="true" />
-              <select value={facilityFilter} onChange={(event) => setFacilityFilter(event.target.value)}>
+              <select value={facilityFilter} onChange={(event) => updateFacilityFilter(event.target.value)}>
                 <option value="all">All facilities</option>
                 <option value="101">Facility A</option>
                 <option value="102">Facility B</option>
                 <option value="103">Facility C</option>
+              </select>
+            </label>
+
+            <label className="selectBox pageSizeControl">
+              <span>Rows</span>
+              <select value={pageSize} onChange={(event) => updatePageSize(Number(event.target.value))}>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+                <option value={200}>200</option>
               </select>
             </label>
           </div>
@@ -193,10 +319,10 @@ export default function Home() {
                 </tr>
               </thead>
               <tbody>
-                {filteredResults.map((result) => (
+                {pageData.rows.map((result) => (
                   <tr
                     key={result.patientId}
-                    className={selected?.patientId === result.patientId ? "selectedRow" : ""}
+                    className={selectedId === result.patientId ? "selectedRow" : ""}
                     onClick={() => setSelectedId(result.patientId)}
                   >
                     <td>
@@ -214,7 +340,7 @@ export default function Home() {
               </tbody>
             </table>
 
-            {!isBusy && filteredResults.length === 0 ? (
+            {!isBusy && pageData.rows.length === 0 ? (
               <div className="emptyState">
                 <Search size={20} aria-hidden="true" />
                 <span>No patients match the current filters.</span>
@@ -224,13 +350,33 @@ export default function Home() {
             {isBusy ? (
               <div className="emptyState">
                 <RefreshCw size={20} className="spin" aria-hidden="true" />
-                <span>{syncState === "syncing" ? "Fetching PCC records and extracting wounds." : "Loading cached results."}</span>
+                <span>{syncState === "syncing" ? "Fetching PCC records and rebuilding caches." : "Loading a page of patients."}</span>
               </div>
             ) : null}
           </div>
+
+          <div className="pagination">
+            <span>{rangeLabel}</span>
+            <div className="paginationButtons">
+              <button onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={pageData.page <= 1 || isBusy}>
+                <ChevronLeft size={17} aria-hidden="true" />
+                <span>Prev</span>
+              </button>
+              <strong>
+                Page {pageData.totalPages === 0 ? 0 : pageData.page} of {pageData.totalPages}
+              </strong>
+              <button
+                onClick={() => setPage((value) => Math.min(pageData.totalPages, value + 1))}
+                disabled={pageData.totalPages === 0 || pageData.page >= pageData.totalPages || isBusy}
+              >
+                <span>Next</span>
+                <ChevronRight size={17} aria-hidden="true" />
+              </button>
+            </div>
+          </div>
         </div>
 
-        <PatientDetail result={selected} />
+        <PatientDetail result={selectedDetail} state={detailState} />
       </section>
     </main>
   );
@@ -256,13 +402,24 @@ function Metric({
   );
 }
 
-function PatientDetail({ result }: { result: EligibilityResult | null }) {
+function PatientDetail({ result, state }: { result: EligibilityResult | null; state: DetailState }) {
+  if (state === "loading") {
+    return (
+      <aside className="detail">
+        <div className="detailEmpty">
+          <RefreshCw size={22} className="spin" aria-hidden="true" />
+          <span>Loading patient evidence.</span>
+        </div>
+      </aside>
+    );
+  }
+
   if (!result) {
     return (
       <aside className="detail">
         <div className="detailEmpty">
           <Download size={22} aria-hidden="true" />
-          <span>Run sync to populate the billing worklist.</span>
+          <span>Run sync or select a patient to see evidence.</span>
         </div>
       </aside>
     );
@@ -344,12 +501,12 @@ function DecisionBadge({ decision }: { decision: RoutingDecision }) {
   return <span className={`badge ${decision}`}>{labels[decision]}</span>;
 }
 
-function formatWound(result: EligibilityResult) {
+function formatWound(result: EligibilityListRow | EligibilityResult) {
   const pieces = [titleCase(result.woundType), result.stage ? `stage ${result.stage}` : null].filter(Boolean);
   return pieces.join(", ") || "None found";
 }
 
-function formatMeasurements(result: EligibilityResult) {
+function formatMeasurements(result: EligibilityListRow | EligibilityResult) {
   if (result.lengthCm === null || result.widthCm === null || result.depthCm === null) {
     return "Missing";
   }
@@ -369,4 +526,42 @@ function formatDateTime(value: string) {
 function titleCase(value: string | null) {
   if (!value) return null;
   return value.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function readPreferencesCookie() {
+  if (typeof document === "undefined") return null;
+
+  const match = document.cookie
+    .split("; ")
+    .find((cookie) => cookie.startsWith("abi_triage_preferences="));
+
+  if (!match) return null;
+
+  try {
+    const parsed = JSON.parse(decodeURIComponent(match.split("=")[1])) as {
+      decisionFilter?: RoutingDecision | "all";
+      facilityFilter?: string;
+      pageSize?: number;
+    };
+
+    return {
+      decisionFilter: parsed.decisionFilter ?? "all",
+      facilityFilter: parsed.facilityFilter ?? "all",
+      pageSize: parsed.pageSize && parsed.pageSize >= 10 ? parsed.pageSize : 50
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writePreferencesCookie(preferences: {
+  decisionFilter: RoutingDecision | "all";
+  facilityFilter: string;
+  pageSize: number;
+}) {
+  if (typeof document === "undefined") return;
+
+  document.cookie = `abi_triage_preferences=${encodeURIComponent(
+    JSON.stringify(preferences)
+  )}; Max-Age=2592000; Path=/; SameSite=Lax`;
 }

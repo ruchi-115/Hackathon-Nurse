@@ -134,16 +134,32 @@ export type EligibilityResult = {
   observations: WoundObservation[];
 };
 
+export type ResultsSummary = {
+  totalPatients: number;
+  autoAccept: number;
+  flagForReview: number;
+  reject: number;
+  medicareB: number;
+  withWoundEvidence: number;
+};
+
 export type ResultsPayload = {
   generatedAt: string | null;
-  summary: {
-    totalPatients: number;
-    autoAccept: number;
-    flagForReview: number;
-    reject: number;
-    medicareB: number;
-    withWoundEvidence: number;
-  };
+  summary: ResultsSummary;
   results: EligibilityResult[];
   errors: SyncError[];
+};
+
+export type EligibilityListRow = Omit<EligibilityResult, "evidence" | "observations"> & {
+  observationCount: number;
+};
+
+export type PaginatedResultsPayload = {
+  generatedAt: string | null;
+  rows: EligibilityListRow[];
+  page: number;
+  pageSize: number;
+  totalRows: number;
+  totalPages: number;
+  errorCount: number;
 };

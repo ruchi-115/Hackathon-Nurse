@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { PccClient, settleEndpoint } from "@/src/lib/pccClient";
 import { buildResults } from "@/src/lib/eligibility";
-import { saveSnapshot } from "@/src/lib/storage";
+import { saveResultsPayload, saveSnapshot } from "@/src/lib/storage";
 import type { FacilityId, Patient, PatientBundle, SyncError, SyncSnapshot } from "@/src/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -45,6 +45,8 @@ export async function POST(request: Request) {
   };
 
   await saveSnapshot(snapshot);
+  const results = buildResults(snapshot);
+  await saveResultsPayload(results);
 
   return NextResponse.json({
     snapshot: {
@@ -52,7 +54,7 @@ export async function POST(request: Request) {
       patientCount: snapshot.patientCount,
       errorCount: snapshot.errors.length
     },
-    results: buildResults(snapshot)
+    summary: results.summary
   });
 }
 

@@ -207,7 +207,7 @@ h2 {
 
 .controls {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) 180px 180px;
+  grid-template-columns: minmax(260px, 1fr) 180px 180px 132px;
   gap: 10px;
   padding: 14px;
   border-bottom: 1px solid var(--line);
@@ -227,6 +227,12 @@ h2 {
   outline: 0;
   background: transparent;
   color: var(--ink);
+}
+
+.pageSizeControl span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 900;
 }
 
 .tableWrap {
@@ -316,6 +322,43 @@ tbody tr:hover,
   align-content: center;
   gap: 12px;
   color: var(--muted);
+}
+
+.pagination {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.paginationButtons {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.paginationButtons button {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.paginationButtons strong {
+  min-width: 104px;
+  color: var(--ink);
+  font-size: 0.9rem;
+  text-align: center;
 }
 
 .detail {
@@ -493,6 +536,16 @@ dd {
 
   .controls {
     grid-template-columns: 1fr;
+  }
+
+  .pagination,
+  .paginationButtons {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .paginationButtons button {
+    justify-content: center;
   }
 
   th,
