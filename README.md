@@ -1,137 +1,324 @@
-# ABI Frameworks Hackathon
+# ABI Wound Billing Triage
 
-## The Challenge
+A Next.js end-to-end application for the ABI Frameworks hackathon challenge. The app syncs synthetic PointClickCare records, extracts wound documentation from structured assessments and clinical notes, evaluates Medicare Part B eligibility, and presents a biller-facing triage worklist.
 
-You are building a data pipeline for a post-acute care company that needs to identify which patients qualify for wound care billing under Medicare Part B.
+## What This Builds
 
-Patient data lives in an EHR system called PointClickCare (PCC). Your pipeline will pull from a mock PCC API, extract clinical wound details from free-text notes and structured assessments, and produce a clean output that tells a biller which patients to act on — and why.
+The challenge asks for a pipeline that helps a post-acute care company identify which patients qualify for wound-care billing under Medicare Part B.
 
-The API is rate-limited and will occasionally refuse requests. Your pipeline must handle that gracefully.
+This implementation turns that into a practical workflow:
 
----
+1. Pull patients from all mock PCC facilities.
+2. Fetch diagnoses, coverage, progress notes, and wound assessments for each patient.
+3. Handle API rate limiting with retry logic and `Retry-After` support.
+4. Persist a local raw sync snapshot in `data/sync-snapshot.json`.
+5. Extract wound type, stage, location, dimensions, and drainage.
+6. Evaluate each patient for active Medicare Part B coverage and complete wound documentation.
+7. Route each patient to `auto_accept`, `flag_for_review`, or `reject`.
+8. Display the results in a dashboard designed for a non-technical biller.
 
-## Background
+## App Experience
 
-Wound care billing under Medicare Part B requires that a patient has:
+The first screen is the billing worklist.
 
-1. An **active wound** (pressure ulcer, diabetic foot ulcer, venous ulcer, etc.)
-2. **Active Medicare Part B coverage**
-3. Documented wound measurements (length, width, depth) and drainage level
+It includes:
 
-A biller reviews eligible patients and decides whether to submit a claim. Your job is to automate the data collection and triage steps that currently happen manually.
+- a summary of total patients, auto-accepts, review items, rejections, and Medicare B patients
+- a `Run sync` action that fetches the mock PCC API and rebuilds the local snapshot
+- searchable and filterable patient results
+- a patient detail panel with:
+  - routing decision
+  - plain-English reason
+  - coverage evidence
+  - extracted wound fields
+  - evidence snippet
+  - source observations
 
-**Routing decisions:**
+The dashboard is meant to answer a biller's core question quickly:
 
-| Decision | Meaning |
-|---|---|
-| `auto_accept` | All required fields are clearly documented — safe to route to billing |
-| `flag_for_review` | Data is ambiguous or incomplete — a clinician or biller should review |
-| `reject` | Reliable extraction is not possible — do not route to billing |
+> Who can I act on, and why?
 
----
+## Tech Stack
 
-## The Data
+- **Next.js** for the full-stack app
+- **React** for the worklist UI
+- **TypeScript** for typed pipeline models
+- **Local JSON storage** for the raw sync snapshot
+- **Rules and regex extraction** for explainable wound parsing
+- **Server route handlers** for API sync and result generation
 
-The API exposes **300 synthetic patients** across three facilities. No real PHI is used.
+No external database is required for the hackathon version. The local file snapshot keeps the app easy to run and inspect while still making the pipeline reproducible.
 
-| Facility | `facility_id` | Patients |
-|---|---|---|
-| Facility A | `101` | 120 |
-| Facility B | `102` | 90 |
-| Facility C | `103` | 90 |
+## Setup
 
-**Payer mix:** ~60% Medicare Part B, ~15% Medicare Part A, ~10% Medicaid, ~15% HMO. Only Medicare Part B patients are eligible for the billing workflow.
+```bash
+npm install
+npm run dev
+```
 
-**Note formats you will encounter:**
+Then open:
 
-| Format | Description |
-|---|---|
-| SOAP | Fully structured — wound type, stage, and dimensions are explicit labeled fields |
-| Prose | Abbreviated free text with shorthand like `Meas 4.2x3.1x1.5cm` |
-| Multi-wound | Describes two wounds; you must identify the primary wound |
-| Envive | All clinical details packed into a single unstructured narrative paragraph |
+```text
+http://localhost:3000
+```
 
-**Wound types:** pressure ulcer (stages 2–4 and unstageable), diabetic foot ulcer, venous stasis ulcer, arterial ulcer, surgical site infection, abscess, burn.
+Run the first sync from the dashboard. The sync can take a little time because the mock API intentionally returns HTTP `429` responses around 30% of the time.
 
----
+## Environment
 
-## The API
+The app defaults to the hackathon API:
 
-**Base URL:** `https://hackathon.prod.pulsefoundry.ai`
+```text
+https://hackathon.prod.pulsefoundry.ai
+```
 
-Full endpoint documentation is in [API.md](./API.md). The short version:
+To override it:
 
-| Endpoint | What it returns |
-|---|---|
-| `GET /pcc/patients?facility_id=101` | All patients for a facility |
-| `GET /pcc/diagnoses?patient_id=FA-001` | ICD-10 diagnoses for a patient |
-| `GET /pcc/coverage?patient_id=FA-001` | Insurance coverage records |
-| `GET /pcc/notes?patient_id=1` | Free-text clinical progress notes |
-| `GET /pcc/assessments?patient_id=1` | Structured wound assessment forms |
+```bash
+PCC_BASE_URL=https://your-api.example.com npm run dev
+```
 
-**Important — two patient identifiers:**
-- `patient_id` (string, e.g. `FA-001`) — use this for `/diagnoses` and `/coverage`
-- `id` (integer, e.g. `1`) — use this for `/notes` and `/assessments`
+## Project Structure
 
-Both are returned by the `/patients` endpoint.
+```text
+app/
+  api/
+    health/route.ts     health and local snapshot status
+    results/route.ts    reads snapshot and returns eligibility results
+    sync/route.ts       fetches PCC data and writes the snapshot
+  globals.css           dashboard styling
+  layout.tsx            app shell metadata
+  page.tsx              biller-facing worklist UI
 
-**Rate limiting:** Every request has a **30% chance of returning HTTP 429**. The response includes a `Retry-After` header. You must implement retry logic — pipelines that don't handle 429s will fail to load data. See [API.md](./API.md) for recommended retry patterns.
+src/lib/
+  eligibility.ts        patient-level routing rules
+  extraction.ts         structured and free-text wound extraction
+  pccClient.ts          API client with retry and backoff
+  storage.ts            local snapshot persistence
+  types.ts              shared TypeScript models
 
----
+data/
+  sync-snapshot.json    generated after running sync
 
-## What to Build
+API.md                 hackathon API reference
+README.md             this handoff document
+```
 
-### Required
+## Pipeline Design
 
-**1. Data ingestion pipeline**
-Fetch all patients, diagnoses, coverage, notes, and assessments from the API. Handle rate limiting. Store the results somewhere queryable (a local database, dataframe, files — your choice).
+### 1. Facility Sync
 
-**2. Wound data extraction**
-From each progress note and assessment, extract:
-- Wound type
-- Wound stage (for pressure ulcers)
-- Location
-- Measurements: length, width, depth (cm)
-- Drainage amount (`none` / `light` / `moderate` / `heavy`)
+The app queries all facilities:
 
-**3. Eligibility output table**
-Produce one row per patient with:
-- Extracted wound fields (above)
-- Whether the patient has active Medicare Part B coverage
-- A routing decision: `auto_accept`, `flag_for_review`, or `reject`
-- A plain-English reason for the decision
+```text
+101 - Facility A
+102 - Facility B
+103 - Facility C
+```
 
-**4. Presentation**
-Walk us through your output as if presenting to a non-technical biller. What do they see? How do they know what to act on?
+The pipeline does not hardcode patient counts. It asks the API for patients per facility and processes whatever is returned.
 
-**5. Visual output**
-Display your results in a visual format — a dashboard, UI, or interactive table. A biller should be able to see patient routing decisions at a glance without reading raw data.
+### 2. Identifier Handling
 
-### Optional / Bonus
+The mock PCC API uses two patient identifiers:
 
-- Use an LLM or agent to assist with extraction or generate a summary narrative per patient
-- Implement incremental sync using the `since` parameter (only fetch records modified since your last run)
+- string `patient_id`, such as `FA-001`, for diagnoses and coverage
+- integer `id`, such as `1`, for notes and assessments
 
----
+The sync route keeps both identifiers from the patient endpoint and uses the correct one for each downstream endpoint.
 
-## Judging Criteria
+### 3. Rate Limit Handling
 
-| Area | What we're looking for |
-|---|---|
-| **Pipeline design** | Does it handle API failures gracefully? Is the data flow clear and maintainable? |
-| **Extraction accuracy** | Are wound fields correctly pulled from both structured and free-text notes? |
-| **Schema & data modeling** | Is the output well-structured and easy to query? |
-| **Presentation** | Can you explain your output to a non-technical audience? Is the routing logic easy to follow? |
-| **Problem-solving approach** | How did you handle ambiguous cases? What tradeoffs did you make? |
+Every PCC request goes through `PccClient`.
 
-There is no single correct solution. We care more about your reasoning and methodology than a perfect accuracy score. Be prepared to explain your decisions.
+The client:
 
----
+- retries HTTP `429`
+- reads the `Retry-After` header
+- adds small jitter to avoid synchronized retries
+- retries transient `5xx` responses
+- fails individual endpoint calls without crashing the full sync
 
-## Submission
+Endpoint-level failures are stored in the snapshot and returned to the UI through the results payload.
 
-At the end of the session, you will present your work. Plan for roughly **10 minutes**: a brief walkthrough of your pipeline architecture, a demo of your output table, and a few example patients showing your routing decisions.
+### 4. Local Snapshot
 
-Bring any questions — we're available throughout.
+After sync, the app writes:
 
-Good luck.
+```text
+data/sync-snapshot.json
+```
+
+The snapshot contains:
+
+- generation timestamp
+- facilities synced
+- patient bundles
+- diagnoses
+- coverage
+- notes
+- assessments
+- endpoint errors
+
+This makes the pipeline inspectable and repeatable during judging.
+
+## Extraction Strategy
+
+The extraction layer favors reliable structured data before free text.
+
+### Source Priority
+
+1. **Structured assessments**
+   - parse `raw_json`
+   - highest confidence
+   - best source for dimensions and drainage
+
+2. **Structured progress notes**
+   - parse labels such as `Location:`, `Wound Type:`, `Length:`, `Drainage:`
+   - high confidence when all required fields are present
+
+3. **Prose notes**
+   - parse shorthand such as `4.2x3.1x1.5cm`
+   - parse drainage phrases such as `moderate drainage`
+   - lower confidence than structured notes
+
+4. **Diagnoses**
+   - used as wound evidence only
+   - not enough for `auto_accept` because diagnoses do not include measurements or drainage
+
+### Extracted Fields
+
+For each wound observation, the app attempts to extract:
+
+- wound type
+- pressure ulcer stage
+- location
+- length in cm
+- width in cm
+- depth in cm
+- drainage amount
+- source
+- source date
+- evidence text
+- confidence score
+
+## Eligibility Logic
+
+The output is one patient-level row.
+
+### `auto_accept`
+
+Assigned when:
+
+- active Medicare Part B coverage exists
+- wound evidence exists
+- wound type is present
+- length, width, and depth are present
+- drainage amount is present
+- extraction confidence is high enough
+
+This means the patient is ready for billing review.
+
+### `flag_for_review`
+
+Assigned when:
+
+- active Medicare Part B coverage exists
+- wound evidence exists
+- but required wound fields are incomplete, ambiguous, or lower confidence
+
+This is the queue for a clinician or biller to inspect.
+
+### `reject`
+
+Assigned when:
+
+- active Medicare Part B coverage is missing, or
+- no active wound evidence is found
+
+This prevents non-billable patients from entering the billing work queue.
+
+## Why This Is Scalable
+
+The hackathon version uses local JSON storage, but the code is split so each layer can be swapped cleanly.
+
+Recommended production upgrades:
+
+- Replace `data/sync-snapshot.json` with Postgres.
+- Store raw API responses in append-only tables.
+- Add incremental sync using the API's `since` parameter.
+- Add durable job processing with a queue.
+- Track sync runs, endpoint latency, retries, and failed patients.
+- Add authenticated biller accounts and audit history.
+- Add an LLM fallback only for low-confidence narrative notes.
+- Save human review outcomes to improve future routing.
+
+The current app already separates the important concerns:
+
+- API client
+- storage
+- extraction
+- eligibility rules
+- presentation
+
+That makes it straightforward to evolve without rewriting the whole system.
+
+## Demo Walkthrough
+
+For a 10-minute presentation:
+
+1. Start on the dashboard and run a sync.
+2. Explain that the app pulls from all PCC facilities and handles rate limits automatically.
+3. Show the summary metrics.
+4. Filter to `Auto accept`.
+5. Open one patient and read the reason aloud like a biller would.
+6. Filter to `Review`.
+7. Show a patient with missing measurements or drainage.
+8. Filter to `Reject`.
+9. Show that non-Medicare-B patients are excluded from billing action.
+10. Close with the architecture: sync, extract, route, present.
+
+## Design Choices
+
+### Why rules first?
+
+Rules are explainable and deterministic. Structured assessments and labeled notes should not require an LLM to parse reliably.
+
+### Why include confidence?
+
+Confidence helps separate clean extraction from ambiguous narrative notes. It also gives a future human-review workflow a useful sorting signal.
+
+### Why preserve evidence snippets?
+
+A biller needs trust. The app does not only say `auto_accept`; it shows the source evidence behind the decision.
+
+### Why local JSON instead of a database?
+
+For the hackathon, local JSON is easier to inspect and avoids setup overhead. The code is structured so the storage layer can be replaced with SQLite or Postgres later.
+
+## API Endpoints
+
+### `POST /api/sync`
+
+Fetches PCC data, writes `data/sync-snapshot.json`, builds eligibility results, and returns them to the UI.
+
+### `GET /api/results`
+
+Reads the latest local snapshot and returns the current eligibility table.
+
+If no snapshot exists, it returns an empty result set.
+
+### `GET /api/health`
+
+Returns whether the app has a local snapshot and where it is stored.
+
+## Known Tradeoffs
+
+- Multi-wound notes are handled by ranking extracted observations, but a production system should preserve explicit wound identity across time.
+- Narrative extraction is intentionally conservative. Ambiguous notes should route to review.
+- The app currently runs sync from a web request. A production system should move sync to a background job.
+- The local snapshot is a convenient hackathon store, not a multi-user database.
+
+## Challenge Reference
+
+The mock API reference is in [API.md](./API.md).

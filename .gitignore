@@ -1,0 +1,5 @@
+node_modules
+.next
+out
+data/sync-snapshot.json
+.env*.local
