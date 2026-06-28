@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: abi-pipeline-api-free
+    runtime: go
+    plan: free
+    buildCommand: go build -o pipeline ./cmd/pipeline
+    startCommand: bash scripts/render-backend-start.sh
+    healthCheckPath: /health
+    envVars:
+      - key: DB_PATH
+        value: /tmp/pcc.db
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: RATE_PER_SECOND
+        value: "8"
+      - key: RATE_BURST
+        value: "2"
+      - key: MAX_RETRIES
+        value: "8"
