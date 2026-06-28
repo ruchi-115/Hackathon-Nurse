@@ -19,7 +19,7 @@ Deploy the Go backend first. For Render, use `render.yaml` or follow [DEPLOYMENT
 After the backend is deployed, copy its public URL, for example:
 
 ```text
-https://abi-pipeline-api.onrender.com
+https://abi-pipeline-api-free.onrender.com
 ```
 
 ## Deploy Through Vercel Dashboard
@@ -40,7 +40,14 @@ Output Directory: .next
 7. Add this environment variable for Production, Preview, and Development:
 
 ```text
-GO_API_BASE_URL=https://your-backend-service.onrender.com
+NEXT_PUBLIC_GO_API_BASE_URL=https://abi-pipeline-api-free.onrender.com
+```
+
+You can also add this server-side variable, but the dashboard can work without
+Vercel route handlers when `NEXT_PUBLIC_GO_API_BASE_URL` is set:
+
+```text
+GO_API_BASE_URL=https://abi-pipeline-api-free.onrender.com
 ```
 
 8. Deploy.
@@ -57,6 +64,9 @@ npx vercel
 When prompted, link this project. Then set the backend URL:
 
 ```bash
+npx vercel env add NEXT_PUBLIC_GO_API_BASE_URL production
+npx vercel env add NEXT_PUBLIC_GO_API_BASE_URL preview
+npx vercel env add NEXT_PUBLIC_GO_API_BASE_URL development
 npx vercel env add GO_API_BASE_URL production
 npx vercel env add GO_API_BASE_URL preview
 npx vercel env add GO_API_BASE_URL development

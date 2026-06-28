@@ -5,6 +5,11 @@ import type {
   Stats
 } from "@/src/lib/types";
 
+const publicBackendBase = process.env.NEXT_PUBLIC_GO_API_BASE_URL?.replace(
+  /\/$/,
+  ""
+);
+
 function buildQuery(filters?: DashboardFilters) {
   const params = new URLSearchParams();
   if (filters?.facility && filters.facility !== "all") {
@@ -19,6 +24,10 @@ function buildQuery(filters?: DashboardFilters) {
   return params.toString();
 }
 
+function endpoint(backendPath: string, proxyPath: string) {
+  return publicBackendBase ? `${publicBackendBase}${backendPath}` : proxyPath;
+}
+
 async function requestJSON<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) {
@@ -31,18 +40,22 @@ export async function listEligibility(
   filters?: DashboardFilters
 ): Promise<EligibilityResponse> {
   const query = buildQuery(filters);
-  return requestJSON<EligibilityResponse>(
-    `/api/eligibility${query ? `?${query}` : ""}`
+  const path = `/eligibility${query ? `?${query}` : ""}`;
+  const data = await requestJSON<EligibilityResponse>(
+    endpoint(path, `/api${path}`)
   );
+  return { ...data, source: "backend" };
 }
 
 export async function getStats(): Promise<Stats> {
-  return requestJSON<Stats>("/api/stats");
+  const data = await requestJSON<Stats>(endpoint("/stats", "/api/stats"));
+  return { ...data, source: "backend" };
 }
 
 export async function getPatient(patientId: string): Promise<PatientDetail> {
+  const path = `/patients/${encodeURIComponent(patientId)}`;
   return requestJSON<PatientDetail>(
-    `/api/patients/${encodeURIComponent(patientId)}`
+    endpoint(path, `/api${path}`)
   );
 }
 
