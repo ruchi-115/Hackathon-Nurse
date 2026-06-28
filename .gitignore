@@ -10,5 +10,10 @@ pcc.db-wal
 /pipeline
 *.exe
 
+# Frontend dependencies/build output
+node_modules/
+.next/
+out/
+
 # Env files
 .env
