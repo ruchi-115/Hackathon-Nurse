@@ -3,6 +3,8 @@
 import {
   Activity,
   AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
   CheckCircle2,
   ClipboardList,
   FileText,
@@ -28,6 +30,9 @@ import type {
   PatientDetail,
   Stats
 } from "@/src/lib/types";
+
+const EXPECTED_PATIENT_COUNT = 300;
+const PAGE_SIZE_OPTIONS = [25, 50, 100];
 
 const decisionCopy: Record<
   Decision,
@@ -61,12 +66,17 @@ export function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<PatientDetail | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function refresh() {
-    setLoading(true);
+  async function refresh(background = false) {
+    const keepTableVisible = background || rows.length > 0;
+    setLoading(!keepTableVisible);
+    setRefreshing(keepTableVisible);
     setError(null);
     try {
       const [eligibility, dashboardStats] = await Promise.all([
@@ -80,12 +90,36 @@ export function Dashboard() {
       setError(err instanceof Error ? err.message : "Unable to load dashboard");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }
 
   useEffect(() => {
-    void refresh();
+    void refresh(rows.length > 0);
   }, [filters.facility, filters.decision, filters.mcbOnly]);
+
+  useEffect(() => {
+    if (
+      loading ||
+      refreshing ||
+      error ||
+      (stats?.total ?? 0) >= EXPECTED_PATIENT_COUNT
+    ) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      void refresh(true);
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, [
+    loading,
+    refreshing,
+    error,
+    stats?.total,
+    filters.facility,
+    filters.decision,
+    filters.mcbOnly
+  ]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -118,6 +152,20 @@ export function Dashboard() {
     });
   }, [rows, search]);
 
+  useEffect(() => {
+    setPage(1);
+  }, [search, filters.facility, filters.decision, filters.mcbOnly, pageSize]);
+
+  const totalPages = Math.max(1, Math.ceil(visibleRows.length / pageSize));
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages));
+  }, [totalPages]);
+
+  const pageStart = (page - 1) * pageSize;
+  const pageRows = visibleRows.slice(pageStart, pageStart + pageSize);
+  const pageEnd = Math.min(pageStart + pageSize, visibleRows.length);
+
   const counts = {
     total: stats?.total ?? rows.length,
     auto: stats?.by_decision.auto_accept ?? 0,
@@ -125,6 +173,12 @@ export function Dashboard() {
     reject: stats?.by_decision.reject ?? 0,
     mcb: stats?.active_mcb ?? rows.filter((row) => row.has_active_mcb).length
   };
+  const syncLabel =
+    stats?.source === "backend"
+      ? counts.total < EXPECTED_PATIENT_COUNT
+        ? `Syncing ${counts.total}/${EXPECTED_PATIENT_COUNT}`
+        : "Go API live"
+      : "Backend required";
 
   return (
     <main className="shell">
@@ -136,16 +190,20 @@ export function Dashboard() {
         <div className="topbar-actions">
           <span className="source-pill">
             <Activity size={16} />
-            {stats?.source === "backend" ? "Go API live" : "Backend required"}
+            {syncLabel}
           </span>
-          <button className="icon-button" onClick={() => void refresh()} title="Refresh">
-            <RefreshCw size={18} />
+          <button
+            className="icon-button"
+            onClick={() => void refresh(true)}
+            title="Refresh"
+          >
+            <RefreshCw className={refreshing ? "spin" : ""} size={18} />
           </button>
         </div>
       </header>
 
       <section className="metric-grid" aria-label="Pipeline summary">
-        <Metric icon={<ClipboardList />} label="Patients" value={counts.total} />
+        <Metric icon={<ClipboardList />} label="Processed" value={counts.total} />
         <Metric icon={<CheckCircle2 />} label="Auto accept" value={counts.auto} tone="success" />
         <Metric icon={<AlertTriangle />} label="Needs review" value={counts.review} tone="warning" />
         <Metric icon={<XCircle />} label="Rejected" value={counts.reject} tone="danger" />
@@ -214,34 +272,81 @@ export function Dashboard() {
           {loading ? <div className="status-panel">Loading eligibility rows...</div> : null}
 
           {!loading && !error ? (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Patient</th>
-                    <th>Route</th>
-                    <th>Facility</th>
-                    <th>Payer</th>
-                    <th>Wound</th>
-                    <th>Measurements</th>
-                    <th>Reason</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleRows.map((row) => (
-                    <EligibilityTableRow
-                      key={row.patient_id}
-                      row={row}
-                      selected={row.patient_id === selectedId}
-                      onSelect={() => setSelectedId(row.patient_id)}
-                    />
-                  ))}
-                </tbody>
-              </table>
-              {visibleRows.length === 0 ? (
-                <div className="status-panel">No patients match the current filters.</div>
-              ) : null}
-            </div>
+            <>
+              <div className="table-status">
+                <span>
+                  Showing {visibleRows.length === 0 ? 0 : pageStart + 1}-
+                  {pageEnd} of {visibleRows.length} synced rows
+                </span>
+                {refreshing ? <span className="syncing-dot">Syncing</span> : null}
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Patient</th>
+                      <th>Route</th>
+                      <th>Facility</th>
+                      <th>Payer</th>
+                      <th>Wound</th>
+                      <th>Measurements</th>
+                      <th>Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pageRows.map((row) => (
+                      <EligibilityTableRow
+                        key={row.patient_id}
+                        row={row}
+                        selected={row.patient_id === selectedId}
+                        onSelect={() => setSelectedId(row.patient_id)}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+                {visibleRows.length === 0 ? (
+                  <div className="status-panel">No patients match the current filters.</div>
+                ) : null}
+              </div>
+              <div className="pagination-bar">
+                <label>
+                  Rows
+                  <select
+                    value={pageSize}
+                    onChange={(event) => setPageSize(Number(event.target.value))}
+                  >
+                    {PAGE_SIZE_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="pagination-controls">
+                  <button
+                    className="pager-button"
+                    disabled={page <= 1}
+                    onClick={() => setPage((current) => Math.max(1, current - 1))}
+                    title="Previous page"
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <span>
+                    Page {page} of {totalPages}
+                  </span>
+                  <button
+                    className="pager-button"
+                    disabled={page >= totalPages}
+                    onClick={() =>
+                      setPage((current) => Math.min(totalPages, current + 1))
+                    }
+                    title="Next page"
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+              </div>
+            </>
           ) : null}
         </div>
 

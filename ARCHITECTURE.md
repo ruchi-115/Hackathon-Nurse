@@ -63,13 +63,13 @@ sequenceDiagram
     participant Biller
 
     Operator->>Pipeline: go run ./cmd/pipeline run
-    Pipeline->>PCC: GET facilities and patient records
+    Pipeline->>API: Serve /health, /stats, /eligibility, /patients/{patientID}
+    Pipeline->>PCC: Background GET facilities and patient records
     PCC-->>Pipeline: Patients, diagnoses, coverage, notes, assessments
     Pipeline->>DB: Upsert raw records
     Pipeline->>DB: Read per-patient record bundle
     Pipeline->>Pipeline: Extract wound fields and route decision
-    Pipeline->>DB: Upsert eligibility row
-    Pipeline->>API: Serve /health, /stats, /eligibility, /patients/{patientID}
+    Pipeline->>DB: Upsert eligibility row as each patient is ready
     Biller->>UI: Open dashboard
     UI->>Next: Request stats, table rows, patient detail
     Next->>API: Proxy backend requests
@@ -78,6 +78,7 @@ sequenceDiagram
     API-->>Next: JSON response
     Next-->>UI: JSON response
     UI-->>Biller: Routing summary and patient evidence
+    UI->>Next: Poll while processed count is below 300
 ```
 
 ## Key Data Products
@@ -95,4 +96,3 @@ sequenceDiagram
 - `go run ./cmd/pipeline process`: re-run extraction and routing on existing SQLite data
 - `go run ./cmd/pipeline serve`: serve the REST API from existing SQLite data
 - `go run ./cmd/pipeline run`: ingest, process, then serve
-

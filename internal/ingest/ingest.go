@@ -43,10 +43,14 @@ type Result struct {
 	Elapsed     time.Duration
 }
 
+// PatientCallback runs after a patient's child records have been attempted.
+// It is best-effort: callback failures are logged and do not abort ingestion.
+type PatientCallback func(context.Context, models.Patient) error
+
 // Run resolves all patients per facility, then fans out across them to fetch
 // diagnoses, coverage, notes, and assessments concurrently. `since` is optional
 // (ISO 8601) for incremental sync.
-func (in *Ingestor) Run(ctx context.Context, since string) (*Result, error) {
+func (in *Ingestor) Run(ctx context.Context, since string, afterPatient PatientCallback) (*Result, error) {
 	start := time.Now()
 	res := &Result{}
 
@@ -81,14 +85,19 @@ func (in *Ingestor) Run(ctx context.Context, since string) (*Result, error) {
 			if err != nil {
 				// Log and continue: one patient's failure shouldn't abort the run.
 				log.Printf("patient %s: %v", p.PatientID, err)
-				return nil
+			} else {
+				mu.Lock()
+				res.Diagnoses += counts.diagnoses
+				res.Coverage += counts.coverage
+				res.Notes += counts.notes
+				res.Assessments += counts.assessments
+				mu.Unlock()
 			}
-			mu.Lock()
-			res.Diagnoses += counts.diagnoses
-			res.Coverage += counts.coverage
-			res.Notes += counts.notes
-			res.Assessments += counts.assessments
-			mu.Unlock()
+			if afterPatient != nil && gctx.Err() == nil {
+				if err := afterPatient(gctx, p); err != nil {
+					log.Printf("patient %s: process: %v", p.PatientID, err)
+				}
+			}
 			return nil
 		})
 	}

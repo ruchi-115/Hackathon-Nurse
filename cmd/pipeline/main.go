@@ -20,6 +20,7 @@ import (
 	"github.com/Matrix030/hackathon-nurse/internal/config"
 	"github.com/Matrix030/hackathon-nurse/internal/extract"
 	"github.com/Matrix030/hackathon-nurse/internal/ingest"
+	"github.com/Matrix030/hackathon-nurse/internal/models"
 	"github.com/Matrix030/hackathon-nurse/internal/pccclient"
 	"github.com/Matrix030/hackathon-nurse/internal/store"
 )
@@ -43,7 +44,7 @@ func main() {
 
 	switch cmd {
 	case "ingest":
-		if err := runIngest(ctx, cfg, st, since); err != nil {
+		if err := runIngest(ctx, cfg, st, since, false); err != nil {
 			log.Fatalf("ingest: %v", err)
 		}
 	case "process":
@@ -56,9 +57,11 @@ func main() {
 			log.Fatalf("serve: %v", err)
 		}
 	case "run":
-		if err := runIngest(ctx, cfg, st, since); err != nil {
-			log.Fatalf("ingest: %v", err)
-		}
+		go func() {
+			if err := runIngest(ctx, cfg, st, since, true); err != nil {
+				log.Printf("background ingest: %v", err)
+			}
+		}()
 		if err := runServe(ctx, cfg, st); err != nil {
 			log.Fatalf("serve: %v", err)
 		}
@@ -68,7 +71,7 @@ func main() {
 	}
 }
 
-func runIngest(ctx context.Context, cfg config.Config, st *store.Store, since string) error {
+func runIngest(ctx context.Context, cfg config.Config, st *store.Store, since string, progressive bool) error {
 	client := pccclient.New(cfg)
 	if err := client.Health(ctx); err != nil {
 		log.Printf("warning: health check failed: %v", err)
@@ -76,7 +79,20 @@ func runIngest(ctx context.Context, cfg config.Config, st *store.Store, since st
 
 	log.Printf("ingesting (concurrency=%d, rate=%.0f/s)...", cfg.Concurrency, cfg.RatePerSecond)
 	in := ingest.New(client, st, cfg)
-	res, err := in.Run(ctx, since)
+	var afterPatient ingest.PatientCallback
+	if progressive {
+		llm := extract.NewLLM(cfg)
+		if llm == nil {
+			log.Printf("progressive processing enabled; LLM fallback disabled (no ANTHROPIC_API_KEY)")
+		} else {
+			log.Printf("progressive processing enabled; LLM fallback enabled (model=%s)", cfg.AnthropicModel)
+		}
+		afterPatient = func(ctx context.Context, p models.Patient) error {
+			_, err := ingest.ProcessPatient(ctx, st, llm, p)
+			return err
+		}
+	}
+	res, err := in.Run(ctx, since, afterPatient)
 	if err != nil {
 		return err
 	}
@@ -85,6 +101,9 @@ func runIngest(ctx context.Context, cfg config.Config, st *store.Store, since st
 	log.Printf("API calls: %d requests, %d retries, %d failures (%.0f%% retry rate)",
 		res.Requests, res.Retries, res.Failures, retryPct(res.Requests, res.Retries))
 
+	if progressive {
+		log.Printf("running final extraction/routing reconciliation over stored data...")
+	}
 	return runProcess(ctx, cfg, st)
 }
 

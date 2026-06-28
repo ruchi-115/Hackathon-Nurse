@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: abi-pipeline-api
+    runtime: go
+    plan: starter
+    buildCommand: go build -o pipeline ./cmd/pipeline
+    startCommand: bash scripts/render-backend-start.sh
+    healthCheckPath: /health
+    envVars:
+      - key: DB_PATH
+        value: /var/data/pcc.db
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: RATE_PER_SECOND
+        value: "8"
+      - key: RATE_BURST
+        value: "2"
+      - key: MAX_RETRIES
+        value: "8"
+    disk:
+      name: pcc-data
+      mountPath: /var/data
+      sizeGB: 1
+
+  - type: web
+    name: abi-pipeline-web
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: GO_API_BASE_URL
+        fromService:
+          type: web
+          name: abi-pipeline-api
+          envVarKey: RENDER_EXTERNAL_URL
